@@ -3,9 +3,9 @@
 Plugin Name: Disqus Comments Importer
 Plugin URI: http://wordpress.org/extend/plugins/disqus-comments-importer/
 Description: Import comments from a Disqus export file.
-Author: Automattic
+Author: Automattic, David Lynch
 Author URI: http://automattic.com
-Version: 0.1
+Version: 0.2
 Stable tag: 0.1
 License: GPL v2 - http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
 
@@ -137,7 +137,9 @@ if ( class_exists( 'WP_Importer' ) ) {
 	
 		// Parses file for all entries. Depending on arg, we count or process comments
 		function get_entries( $process_comment_func = NULL ) {
-			set_magic_quotes_runtime( 0 );
+			if (function_exists('set_magic_quotes_runtime')) {
+				set_magic_quotes_runtime( 0 );
+			}
 	
 			$doing_entry = false;
 			$is_disqus_file = false;
