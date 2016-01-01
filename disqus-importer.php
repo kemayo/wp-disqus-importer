@@ -39,6 +39,7 @@ if ( class_exists( 'WP_Importer' ) ) {
 		var $inserted_comments = array ();
 		var $found_comment_count;
 		var $orphan_comments = array();
+		var $thread_to_post_url = array();
 	
 		var $num_comments = 0;
 		var $num_duplicates = 0;
@@ -66,140 +67,43 @@ if ( class_exists( 'WP_Importer' ) ) {
 			wp_import_upload_form( "admin.php?import=disqus&amp;step=1" );
 			echo '</div>';
 		}
-	
-		// Parses a line from XML file for a specific tag and returns value
-		function get_tag( $string, $tag ) {
-			global $wpdb;
-			preg_match( "|<$tag.*?>(.*?)</$tag>|is", $string, $return );
-			if ( isset( $return[1] ) ) {
-				$return = preg_replace( '|^<!\[CDATA\[(.*)\]\]>$|s', '$1', $return[1] );
-				$return = $wpdb->escape( trim( $return ) );
-			} else {
-				$return = '';
-			}
-			return $return;
-		}
-	
-		function get_author_name( $url ) {
-	
-			if ( $name = wp_cache_get( $url, 'disqus_url2name' ) )
-				return $name;
-	
-			$options = array();
-			$options['redirection'] = 5;
-			$options['method'] = 'GET';
-	
-			$response = wp_remote_request( $url, $options );
-	
-			if ( is_wp_error( $response ) )
-				return false;
-	
-			// this feels sloppy, but short of more fully parsing the html, it seems to be the simplest solution
-			preg_match( '|<([a-zA-Z0-9]*) [^>]*class=[^>]*fn[^>]*>(.*?)</\1|s' , $response['body'] , $matches );
-	
-			$name = wp_filter_nohtml_kses( $matches[2] );
-			wp_cache_set( $url , $name , 'disqus_url2name' );
-			return $name;
-		}
-	
-		// Is gzip installed
-		function has_gzip() {
-			return is_callable( 'gzopen' );
-		}
-	
-		// Wrapper to determine method to read file
-		function fopen( $filename, $mode='r' ) {
-			if ( $this->has_gzip() )
-				return gzopen( $filename, $mode );
-			return fopen( $filename, $mode );
-		}
-	
-		// Wrapper to determine method to check for end of file file
-		function feof( $fp ) {
-			if ( $this->has_gzip() )
-				return gzeof( $fp );
-			return feof( $fp );
-		}
-	
-		// Wrapper to determine method to read line in file
-		function fgets( $fp, $len=8192 ) {
-			if ( $this->has_gzip() )
-				return gzgets( $fp, $len );
-			return fgets( $fp, $len );
-		}
-	
-		// Wrapper to determine method to close file
-		function fclose( $fp ) {
-			if ( $this->has_gzip() )
-				return gzclose( $fp );
-			return fclose( $fp );
-		}
-	
+
 		// Parses file for all entries. Depending on arg, we count or process comments
 		function get_entries( $process_comment_func = NULL ) {
 			if (function_exists('set_magic_quotes_runtime')) {
 				set_magic_quotes_runtime( 0 );
 			}
-	
-			$doing_entry = false;
-			$is_disqus_file = false;
-	
-			// Read uploaded file
-			$fp = $this->fopen( $this->file, 'r' );
-			
-			if ( $fp ) {
-			
-				// Loop through file, one line at a time
-				while ( !$this->feof( $fp ) ) {
-					
-					// Remove whitespace.
-					$importline = rtrim( $this->fgets( $fp ) );
-					
-					// this doesn't check that the file is perfectly valid but will at least confirm that it's not the wrong format altogether
-					if ( !$is_disqus_file && strpos( $importline , '<comments>' ) )
-						$is_disqus_file = true;
-	
-					// Identify opening of new post block
-					if ( false !== strpos( $importline, '<article>' ) ) {
-						if ( count( $this->orphan_comments ) )
-							$this->process_orphan_comments();
-						$this->post_url = '';
-						continue;
-					}
-					
-					// Identify post url
-					if ( empty( $this->post_url ) && preg_match( '|<url>([^<]*)</url>|is' , $importline , $matches ) ) {
-						$this->post_url = $matches[1];
-					}
-					
-					// Identify start of new comment block
-					if ( false !== strpos( $importline, '<comment>' ) ) {
-						$this->post = '';
-						$doing_entry = true;
-						continue;
-					}
-					
-					// Identify end of open comment block
-					if ( false !== strpos( $importline, '</comment>' ) ) {
-						$doing_entry = false;
-						if ( $process_comment_func )
-							call_user_func( $process_comment_func, $this->post );
-						continue;
-					}
-					
-					// Append to comment data if inside comment block
-					if ( $doing_entry ) {
-						$this->post .= $importline . "\n";
+
+			$xml = simplexml_load_file( 'compress.zlib://' . $this->file );
+
+			// simple "are we a disqus export?" check
+			if (!$xml || $xml->getName() !== 'disqus') {
+				return false;
+			}
+
+			foreach ($xml->thread as $thread) {
+				$attributes = $thread->attributes('dsq', true);
+				$threadid = $attributes['id'];
+				$link = (string)$thread->link;
+
+				if (empty($this->thread_to_post_url[$threadid])) {
+					if (trailingslashit( $link ) == trailingslashit( get_option( 'siteurl' ) ) ) {
+						$this->thread_to_post_url[$threadid] = (int) get_option( 'page_on_front' );
+					} else {
+						$this->thread_to_post_url[$threadid] = url_to_postid($link);
 					}
 				}
-	
-				$this->fclose( $fp );
 			}
-	
-			return $is_disqus_file;
-	
+
+			if ($process_comment_func) {
+				foreach ($xml->post as $comment) {
+					call_user_func( $process_comment_func, $comment );
+				}
+			}
+
+			return true;
 		}
-	
+
 		// If file uploaded appears to be discuss import, provide options page. Otherwise, provide error.
 		function check_upload() {
 			$is_disqus_file = $this->get_entries( array( &$this, 'count_entries' ));
@@ -230,10 +134,9 @@ if ( class_exists( 'WP_Importer' ) ) {
 	
 		// Increment count
 		function count_entries( $comment ) {
-			$entry = $this->get_tag( $comment, 'date' );
-	
-			if ( $entry )
+			if ( $comment->createdAt ) {
 				$this->found_comment_count++;
+			}
 		}
 	
 		// Process comments (import if valid) and report back to user
@@ -266,51 +169,59 @@ if ( class_exists( 'WP_Importer' ) ) {
 	
 		// Imports a comment or echos error
 		function process_comment( $comment ) {
-	
 			set_time_limit( 60 );
-	
-			$new_comment['comment_post_ID']			= ( trailingslashit( $this->post_url ) != trailingslashit( get_option( 'siteurl' ) ) ) ? (int) url_to_postid( $this->post_url ) : (int) get_option( 'page_on_front' );
-			if( ! $new_comment['comment_post_ID'] ) { // Couldn't determine the post id from path
+
+			$attributes = $comment->attributes('dsq', true);
+			$disqus_commentid = $attributes['id'];
+
+			$thread = $comment->thread;
+			$threadattributes = $thread->attributes('dsq', true);
+			$threadid = $threadattributes['id'];
+
+			$parentid = false;
+			$disqus_parentid = false;
+			if ($comment->parent) {
+				$parentattributes = $comment->parent->attributes('dsq', true);
+				$disqus_parentid = $parentattributes['id'];
+				if ($disqus_parentid) {
+					$parentid = $this->inserted_comments[$disqus_parentid];
+				}
+			}
+
+			$new_comment = array(
+				'disqus_guid' => $disqus_commentid,
+				'disqus_parent_guid' => $disqus_parentid,
+				'comment_post_ID' => $this->thread_to_post_id[$threadid],
+			);
+
+			if( ! $new_comment['comment_post_ID'] ) {
+				// Couldn't determine the post id from path
 				echo '<li>'. sprintf( __( 'Couldn&#8217;t determine the correct item to attach this comment to. Given URL: <code>%s</code>.', 'disqus-importer' ) , esc_url( $post_url )) ."</li>\n";
 				$this->num_uncertain++;
 				return 0;
 			}
-	
-			$new_comment['comment_author']			= $this->get_tag( $comment, 'name');
-			$new_comment['comment_author_email']	= $this->get_tag( $comment, 'email');
-			$new_comment['comment_author_IP']		= $this->get_tag( $comment, 'ip_address');
-			$new_comment['comment_author_url']		= $this->get_tag( $comment, 'url');
-			$gmt_unixtime							= strtotime( $this->get_tag( $comment, 'date' ));
-			$new_comment['comment_date_gmt']		= date( 'Y-m-d H:i:s' , $gmt_unixtime );
-			$new_comment['comment_date']			= date( 'Y-m-d H:i:s' , $gmt_unixtime + get_option( 'gmt_offset' ) * 3600 ); // strangely, get_date_from_gmt returns unexpected results here
-			$new_comment['comment_content']			= $this->get_tag( $comment, 'message');
-			$new_comment['comment_approved']		= 1; // the export appears to exclude non-public comments
-			$new_comment['comment_type']			= ''; // Disqus doesn't appear to support trackbacks or pingbacks
-			//$new_comment['comment_parent']			= $this->get_tag( $comment, 'wp:comment_parent');
-	
-			// comment author was auth'd by facebook
-			if ( preg_match( '/facebook-.*/' , $new_comment['comment_author'] ) ) {
-				$new_comment['comment_author'] = $this->get_author_name( $new_comment['comment_author_url'] );
-			}
-			// comment author was auth'd by twitter
-			else if( preg_match( '/twitter-.*/' , $new_comment['comment_author'] ) ) {
-				$new_comment['comment_author'] = $this->get_author_name( $new_comment['comment_author_url'] );
-			}
-			// comment author was auth'd by yahoo
-			else if( preg_match( '/yahoo-.*/' , $new_comment['comment_author'] ) ) {
-				$new_comment['comment_author'] = $this->get_author_name( $new_comment['comment_author_url'] );
-			}
-	
+
+			$comment_author = (string)$comment->author->username;
+			$new_comment['comment_author'] = (string)$comment->author->name;
+			$new_comment['comment_author_email'] = (string)$comment->author->email;
+			$new_comment['comment_author_IP'] = (string)$comment->ipAddress;
+			$gmt_unixtime = strtotime( (string)$comment->createdAt );
+			$new_comment['comment_date_gmt'] = date( 'Y-m-d H:i:s' , $gmt_unixtime );
+			$new_comment['comment_date'] = date( 'Y-m-d H:i:s' , $gmt_unixtime + get_option( 'gmt_offset' ) * 3600 ); // strangely, get_date_from_gmt returns unexpected results here
+			$new_comment['comment_content'] = (string)$comment->message;
+			$new_comment['comment_approved'] = 1; // the export appears to exclude non-public comments
+			$new_comment['comment_type'] = ''; // Disqus doesn't appear to support trackbacks or pingbacks
+			$new_comment['comment_parent'] = $parentid;
+
 			$new_comment = array_map( 'html_entity_decode' , $new_comment );
-	
+
 			if( empty( $new_comment['disqus_parent_guid'] ) || $this->comment_exists( array( 'disqus_guid' => $new_comment['disqus_parent_guid'] ) ) ) {
-				// $new_comment['comment_parent'] 	= $this->inserted_comments[ $new_comment['disqus_parent_guid'] ];
 				$this->insert_comment( $new_comment );
 			} else {
 				//echo '<li>'. __( 'Postponed importing an orphan comment.', 'disqus-importer' ) ."</li>\n";
 				$this->orphan_comments[ $new_comment['disqus_guid'] ] = $new_comment;
 			}
-	
+
 			// do_action( 'import_post_added', $post_id );
 		}
 	
@@ -374,8 +285,9 @@ if ( class_exists( 'WP_Importer' ) ) {
 			 NO PAIRING OF PARENT / CHILD IN DISQUS EXPORT YET
 			
 			// must have disqus_guid
-			if( ! isset( $comment['disqus_guid'] ))
+			if( ! isset( $comment['disqus_guid'] )) {
 				return FALSE;
+			}
 	
 			// edge case: we've been given a comment_id because the comment was received through the Echo WP plugin
 			// still, the comment_id may not be correct, so confirm the time is close (because the servers' clocks may not be sync'd)
@@ -449,7 +361,6 @@ if ( class_exists( 'WP_Importer' ) ) {
 	
 			$this->import_start();
 			wp_suspend_cache_invalidation(true);
-			$this->get_entries();
 			$result = $this->process_comments();
 			wp_suspend_cache_invalidation(false);
 			$this->import_end();
