@@ -81,7 +81,7 @@ if ( class_exists( 'WP_Importer' ) ) {
 
 			foreach ($xml->thread as $thread) {
 				$attributes = $thread->attributes('dsq', true);
-				$threadid = $attributes['id'];
+				$threadid = (int)$attributes['id'];
 				$link = (string)$thread->link;
 
 				if (empty($this->thread_to_post_url[$threadid])) {
@@ -172,17 +172,17 @@ if ( class_exists( 'WP_Importer' ) ) {
 			set_time_limit( 60 );
 
 			$attributes = $comment->attributes('dsq', true);
-			$disqus_commentid = $attributes['id'];
+			$disqus_commentid = (int)$attributes['id'];
 
 			$thread = $comment->thread;
 			$threadattributes = $thread->attributes('dsq', true);
-			$threadid = $threadattributes['id'];
+			$threadid = (int)$threadattributes['id'];
 
 			$parentid = false;
 			$disqus_parentid = false;
 			if ($comment->parent) {
 				$parentattributes = $comment->parent->attributes('dsq', true);
-				$disqus_parentid = $parentattributes['id'];
+				$disqus_parentid = (int)$parentattributes['id'];
 				if ($disqus_parentid) {
 					$parentid = $this->inserted_comments[$disqus_parentid];
 				}
@@ -196,7 +196,7 @@ if ( class_exists( 'WP_Importer' ) ) {
 
 			if( ! $new_comment['comment_post_ID'] ) {
 				// Couldn't determine the post id from path
-				echo '<li>'. sprintf( __( 'Couldn&#8217;t determine the correct item to attach this comment to. Given URL: <code>%s</code>.', 'disqus-importer' ) , esc_url( $post_url )) ."</li>\n";
+				echo '<li>', sprintf( __( 'Couldn&#8217;t determine the correct item to attach this comment to. Given thread id: <code>%s</code>.', 'disqus-importer' ) , $threadid), "</li>\n";
 				$this->num_uncertain++;
 				return 0;
 			}
