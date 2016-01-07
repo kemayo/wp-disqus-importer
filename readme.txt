@@ -1,8 +1,8 @@
 === Disqus Comments Importer ===
 Contributors: automattic, blepoxp
 Tags: comments, disqus, import
-Requires at least: 3.0
-Tested up to: 3.0.1
+Requires at least: 4.0
+Tested up to: 4.4
 Stable tag: 0.1
 
 Import comments from a Disqus export file.

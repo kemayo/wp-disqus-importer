@@ -37,7 +37,7 @@ if ( class_exists( 'WP_Importer' ) ) {
 		var $inserted_comments = array ();
 		var $found_comment_count;
 		var $orphan_comments = array();
-		var $thread_to_post_url = array();
+		var $thread_to_post_id = array();
 
 		var $num_comments = 0;
 		var $num_duplicates = 0;
@@ -84,11 +84,12 @@ if ( class_exists( 'WP_Importer' ) ) {
 				$threadid = (int)$attributes['id'];
 				$link = (string)$thread->link;
 
-				if (empty($this->thread_to_post_url[$threadid])) {
+				if (empty($this->thread_to_post_id[$threadid])) {
 					if (trailingslashit( $link ) == trailingslashit( get_option( 'siteurl' ) ) ) {
-						$this->thread_to_post_url[$threadid] = (int) get_option( 'page_on_front' );
+						$this->thread_to_post_id[$threadid] = (int) get_option( 'page_on_front' );
 					} else {
-						$this->thread_to_post_url[$threadid] = url_to_postid($link);
+						$this->thread_to_post_id[$threadid] = url_to_postid($link);
+						// echo "<li>URL to postid: <code>", $link, "</code> - <code>", $this->thread_to_post_id[$threadid], "</code></li>";
 					}
 				}
 			}
@@ -184,7 +185,12 @@ if ( class_exists( 'WP_Importer' ) ) {
 				$parentattributes = $comment->parent->attributes('dsq', true);
 				$disqus_parentid = (int)$parentattributes['id'];
 				if ($disqus_parentid) {
-					$parentid = $this->inserted_comments[$disqus_parentid];
+					if (!empty($this->inserted_comments[$disqus_parentid])) {
+						$parentid = $this->inserted_comments[$disqus_parentid];
+					} else {
+						echo '<li>', sprintf( __( 'Couldn&#8217;t find the parent item to attach this comment to. Given thread id: <code>%s</code>, parent id: <code>%s</code>.', 'disqus-importer' ) , $threadid, $disqus_parentid), "</li>\n";
+						return;
+					}
 				}
 			}
 
@@ -205,11 +211,20 @@ if ( class_exists( 'WP_Importer' ) ) {
 			$new_comment['comment_author'] = (string)$comment->author->name;
 			$new_comment['comment_author_email'] = (string)$comment->author->email;
 			$new_comment['comment_author_IP'] = (string)$comment->ipAddress;
+			$new_comment['comment_author_url'] = ''; // not provided
 			$gmt_unixtime = strtotime( (string)$comment->createdAt );
 			$new_comment['comment_date_gmt'] = date( 'Y-m-d H:i:s' , $gmt_unixtime );
 			$new_comment['comment_date'] = date( 'Y-m-d H:i:s' , $gmt_unixtime + get_option( 'gmt_offset' ) * 3600 ); // strangely, get_date_from_gmt returns unexpected results here
 			$new_comment['comment_content'] = (string)$comment->message;
-			$new_comment['comment_approved'] = 1; // the export appears to exclude non-public comments
+
+			if ( (string)$comment->isDeleted == 'true' ) {
+				$new_comment['comment_approved'] = 'trash';
+			} elseif ( (string)$comment->isSpam == 'true' ) {
+				$new_comment['comment_approved'] = 'spam';
+			} else {
+				$new_comment['comment_approved'] = 1;
+			}
+
 			$new_comment['comment_type'] = ''; // Disqus doesn't appear to support trackbacks or pingbacks
 			$new_comment['comment_parent'] = $parentid;
 
@@ -262,6 +277,9 @@ if ( class_exists( 'WP_Importer' ) ) {
 
 				update_comment_meta( $this->inserted_comments[ $comment['disqus_guid'] ], 'disqus_guid' , $comment['disqus_guid'], TRUE );
 
+				if ( empty( $this->post_ids_processed[ $comment['comment_post_ID'] ] ) ) {
+					$this->post_ids_processed[ $comment['comment_post_ID'] ] = 0;
+				}
 				$this->post_ids_processed[ $comment['comment_post_ID'] ]++;
 				$this->num_comments++;
 
